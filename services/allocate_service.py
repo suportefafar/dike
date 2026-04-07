@@ -134,6 +134,9 @@ class AllocateService:
         # Mapa de capacidade por disciplina
         subject_cap = {}
         if subjects:
+            if isinstance(subjects, dict):
+                subjects = list(subjects.values())
+                
             subject_cap = {
                 s['id']: cls.safe_int(
                     s['data'].get('number_vacancies_offered')
@@ -157,7 +160,15 @@ class AllocateService:
         for req in req_to_solve:
             rd = req.get('data', req)
             c = cls.safe_int(rd.get('capacity', 0))
-            for sid in rd.get('class_subject', []):
+            
+            # Normalizar class_subject (pode vir como dict {"0": "id"} do PHP, string única, ou list)
+            subj_list = rd.get('class_subject', [])
+            if isinstance(subj_list, dict):
+                subj_list = list(subj_list.values())
+            elif isinstance(subj_list, str):
+                subj_list = [subj_list]
+                
+            for sid in subj_list:
                 c = max(c, subject_cap.get(sid, 0))
             req_capacities.append(c)
 
