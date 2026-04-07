@@ -84,6 +84,8 @@ def allocate():
         missing.append('places')
     if 'existing_reservations' not in data:
         missing.append('existing_reservations')
+    if 'subjects' not in data:
+        missing.append('subjects')
 
     if missing:
         return jsonify({
@@ -97,7 +99,7 @@ def allocate():
             places=data['places'],
             existing_reservations=data['existing_reservations'],
             limit_moves=data.get('limit_moves', 3),
-            subjects=data.get('subjects', []),
+            subjects=data['subjects'],
         )
         return jsonify(result)
 
