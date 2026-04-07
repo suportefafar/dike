@@ -8,16 +8,15 @@ from ortools.sat.python import cp_model
 # =============================================================================
 NEW_RESERVATION_DATA = {
     "id": "prof_req_2026_conf",
-    "data": {
+     "data": {
         "title": "Aula Magna de Farmácia (LOTADA)",
         "desc": "FAF-MAGNA",
-        "date": "2026-03-02",
-        "end_date": "2026-07-15",
-        "start_time": "14:00",
+        "date": "2026-03-27",
+        "start_time": "15:00",
         "end_time": "17:00",
         "weekdays": [0],              # Segunda-feira à noite
-        "capacity": 70,        # Exige sala grande
-        "is_weekly": True
+        "capacity": 60,        # Exige sala grande
+        "is_weekly": False
     }
 }
 
@@ -38,9 +37,9 @@ def overlaps(res1, res2):
     
     # 1. Intervalo de Datas
     start1 = datetime.strptime(d1['date'], '%Y-%m-%d')
-    end1 = datetime.strptime(d1.get('end_date', d1['date']), '%Y-%m-%d')
+    end1 = datetime.strptime(d1.get('end_date') or d1['date'], '%Y-%m-%d')
     start2 = datetime.strptime(d2['date'], '%Y-%m-%d')
-    end2 = datetime.strptime(d2.get('end_date', d2['date']), '%Y-%m-%d')
+    end2 = datetime.strptime(d2.get('end_date') or d2['date'], '%Y-%m-%d')
     
     if start1 > end2 or start2 > end1:
         return False
@@ -79,9 +78,16 @@ def safe_int(value, default=0):
         return default
 
 def solve_allocation(limit_moves=3):
-    places = load_json('places.json')
+    places_raw = load_json('places.json')
     existing_reservations = load_json('reservations.json')
-    subjects = load_json('class_subjects_all_fourth_pre.json')
+    
+    # Normalizar dias da semana: o JSON usa 1=Segunda...7=Domingo.
+    # O Python e este script usam 0=Segunda...6=Domingo.
+    for res in existing_reservations:
+        if 'weekdays' in res.get('data', {}):
+            res['data']['weekdays'] = [w - 1 for w in res['data']['weekdays']]
+
+    subjects = load_json('class_subjects.json')
     subject_cap = {s['id']: safe_int(s['data'].get('number_vacancies_offered')) for s in subjects}
 
     # Requisitos da nova reserva
@@ -89,6 +95,11 @@ def solve_allocation(limit_moves=3):
     for sid in NEW_RESERVATION_DATA['data'].get('class_subject', []):
         cap_needed_new = max(cap_needed_new, subject_cap.get(sid, 0))
     
+    allowed_types = ["classroom", "living_room", "computer_lab", "multimedia_room"]
+    places = [
+        p for p in places_raw
+        if p.get('data', {}).get('object_sub_type', [None])[0] in allowed_types
+    ]
     all_places = {p['id']: p for p in places}
     place_ids = list(all_places.keys())
 
