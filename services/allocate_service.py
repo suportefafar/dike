@@ -121,9 +121,16 @@ class AllocateService:
         # Normalizar weekdays: JSON usa 1=Seg...7=Dom → Python 0=Seg...6=Dom
         for res in existing_reservations:
             if 'weekdays' in res.get('data', {}):
-                res['data']['weekdays'] = [
-                    w - 1 for w in res['data']['weekdays']
-                ]
+                try:
+                    res['data']['weekdays'] = [
+                        w - 1 for w in res['data']['weekdays']
+                    ]
+                except TypeError as e:
+                    raise TypeError(
+                        f"Error in 'weekdays' param for reservation id={res.get('id')}. "
+                        f"Value received was: {res['data']['weekdays']}. "
+                        f"Original error: {e}"
+                    ) from e
 
         # Normalizar nova reserva para formato com 'data'
         new_res = {
