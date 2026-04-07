@@ -123,7 +123,7 @@ class AllocateService:
             if 'weekdays' in res.get('data', {}):
                 try:
                     res['data']['weekdays'] = [
-                        w - 1 for w in res['data']['weekdays']
+                        int(w) - 1 for w in res['data']['weekdays']
                     ]
                 except TypeError as e:
                     raise TypeError(
