@@ -97,7 +97,6 @@ def allocate():
             places=data['places'],
             existing_reservations=data['existing_reservations'],
             limit_moves=data.get('limit_moves', 3),
-            subjects=data.get('subjects', []),
         )
         return jsonify(result)
 

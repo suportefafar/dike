@@ -89,20 +89,17 @@ class AllocateService:
 
     @classmethod
     def allocate(cls, new_reservation, places, existing_reservations,
-                 limit_moves=3, subjects=None):
+                 limit_moves=3):
         """
         Busca opções de alocação para uma nova reserva.
 
         Args:
             new_reservation: dict flat com dados da nova reserva
-                (title, date, start_time, end_time, capacity, ...).
+                (title, date, start_time, end_time, capacity_needed, ...).
             places: lista de locais (cada um com 'id' e 'data').
             existing_reservations: lista de reservas existentes
                 (cada uma com 'id' e 'data').
             limit_moves: máximo de remanejamentos permitidos (padrão: 3).
-            subjects: lista opcional de disciplinas (cada uma com 'id'
-                e 'data' contendo 'number_vacancies_offered'). Usada
-                para inferir capacidade mínima por disciplina.
 
         Returns:
             dict com 'total_options', 'options', 'solved_at' e
@@ -122,7 +119,7 @@ class AllocateService:
         for res in existing_reservations:
             if 'weekdays' in res.get('data', {}):
                 res['data']['weekdays'] = [
-                    w - 1 for w in res['data']['weekdays']
+                    int(w) - 1 for w in res['data']['weekdays']
                 ]
 
         # Normalizar nova reserva para formato com 'data'
@@ -131,15 +128,7 @@ class AllocateService:
             "data": new_reservation,
         }
 
-        # Mapa de capacidade por disciplina
-        subject_cap = {}
-        if subjects:
-            subject_cap = {
-                s['id']: cls.safe_int(
-                    s['data'].get('number_vacancies_offered')
-                )
-                for s in subjects
-            }
+
 
         all_places = {p['id']: p for p in places}
         place_ids = list(all_places.keys())
@@ -156,12 +145,12 @@ class AllocateService:
         req_capacities = []
         for req in req_to_solve:
             rd = req.get('data', req)
-            c = cls.safe_int(rd.get('capacity', 0))
-            for sid in rd.get('class_subject', []):
-                c = max(c, subject_cap.get(sid, 0))
+            c = cls.safe_int(rd.get('capacity_needed', 0))
             req_capacities.append(c)
 
         cap_needed_new = req_capacities[0]
+
+        print(f"Capacidade necessária para a nova reserva: {cap_needed_new}")
 
         # Capacidade por sala (indexada pela posição em place_ids)
         place_capacities = [
@@ -174,6 +163,8 @@ class AllocateService:
             pid for idx, pid in enumerate(place_ids)
             if place_capacities[idx] >= cap_needed_new
         ]
+
+        print(f"Total de salas candidatas: {len(candidate_pids)}")
 
         if not candidate_pids:
             return {"total_options": 0, "options": []}
