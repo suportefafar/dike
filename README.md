@@ -21,13 +21,47 @@ Gera uma grade completa de reservas para um semestre. O serviço filtra automati
 
 - **Método:** `POST`
 - **URL:** `/api/generate`
-- **Payload:**
+- **Payload (`JSON`):**
   | Campo | Tipo | Obrigatório | Descrição |
   | :--- | :--- | :---: | :--- |
-  | `subjects` | `list` | Sim | Disciplinas com horários e necessidades. |
-  | `places` | `list` | Sim | Locais disponíveis e capacidades. |
-  | `semester_start` | `string` | Não | Início do semestre (YYYY-MM-DD). Padrão: `2026-03-01`. |
-  | `semester_end` | `string` | Não | Fim do semestre (YYYY-MM-DD). Padrão: `2026-07-15`. |
+  | `subjects` | `list[object]` | Sim | Lista de disciplinas (ver [Estrutura de Disciplinas](#estrutura-de-disciplinas)). |
+  | `places` | `list[object]` | Sim | Lista de locais (ver [Estrutura de Locais](#estrutura-de-locais)). |
+  | `semester_start` | `string` | Não | Início do semestre (`YYYY-MM-DD`). Padrão: `2026-03-01`. |
+  | `semester_end` | `string` | Não | Fim do semestre (`YYYY-MM-DD`). Padrão: `2026-07-15`. |
+
+### Estrutura de Disciplinas (`subjects`)
+Cada item da lista `subjects` deve seguir o formato:
+```json
+{
+  "id": "12345",
+  "data": {
+    "code": "CIC0001",
+    "name_of_subject": "Algoritmos e Programação",
+    "number_vacancies_offered": 40,
+    "desired_time": "13:30 15:30 (qui) 13:30 15:30 (sex)",
+    "group": "A",
+    "use_on_auto_reservation": ["SIM"],
+    "desired_start_date": "2026-03-01",
+    "desired_end_date": "2026-07-15"
+  }
+}
+```
+
+### Estrutura de Locais (`places`)
+Cada item da lista `places` deve seguir o formato:
+```json
+{
+  "id": "R1",
+  "data": {
+    "capacity": 50,
+    "number": "Sala 101",
+    "object_sub_type": ["classroom"]
+  }
+}
+```
+> [!NOTE]
+> Os tipos de sala permitidos são: `classroom`, `living_room`, `computer_lab` e `multimedia_room`.
+
 
 ### Critérios de Filtragem (Skipped Subjects)
 Disciplinas são ignoradas se:
@@ -63,18 +97,61 @@ Busca opções de alocação para uma nova reserva, minimizando o número de rem
 
 - **Método:** `POST`
 - **URL:** `/api/allocate`
-- **Payload:**
+- **Payload (`JSON`):**
   | Campo | Tipo | Obrigatório | Descrição |
   | :--- | :--- | :---: | :--- |
-  | `new_reservation` | `dict` | Sim | Dados da nova reserva (**estrutura flat**). |
-  | `places` | `list` | Sim | Lista de locais (**estrutura com chave `data`**). |
-  | `existing_reservations`| `list` | Sim | Reservas existentes (**estrutura com chave `data`**). |
-  | `subjects` | `list` | Sim | Disciplinas (usadas para inferir capacidade via `number_vacancies_offered`). |
-  | `limit_moves` | `int` | Não | Limite de mudanças permitidas (Padrão: 3). |
+  | `new_reservation` | `object` | Sim | Dados da nova reserva (**estrutura flat**, ver abaixo). |
+  | `places` | `list[object]` | Sim | Lista de locais (ver [Estrutura de Locais](#estrutura-de-locais)). |
+  | `existing_reservations`| `list[object]` | Sim | Reservas atuais (ver [Estrutura de Reservas Existentes](#estrutura-de-reservas-existentes)). |
+  | `limit_moves` | `int` | Não | Máximo de remanejamentos (Padrão: 3). |
 
-> [!NOTE]
-> Os dias da semana (`weekdays`) devem ser informados como inteiros: `1` (Segunda) a `7` (Domingo). Internamente a API converte para o formato 0-6 do Python.
-> Ids de disciplinas em `class_subject` podem ser fornecidos como string, lista ou dicionário (ex: do PHP).
+### Estrutura de Nova Reserva (`new_reservation`)
+```json
+{
+  "title": "Aula Extra - CIC0001",
+  "date": "2026-04-10",
+  "start_time": "14:00",
+  "end_time": "16:00",
+  "capacity_needed": 30,
+  "weekdays": [5],
+  "frequency": "weekly",
+  "end_date": "2026-07-15"
+}
+```
+
+### Estrutura de Reservas Existentes (`existing_reservations`)
+```json
+{
+  "id": "1772117841001f087e0a",
+  "data": {
+    "title": "Cálculo 1",
+    "date": "2026-03-01",
+    "start_time": "08:00",
+    "end_time": "10:00",
+    "capacity_needed": 45,
+    "weekdays": [1, 3],
+    "place": ["1772117840015436d2bc"],
+    "frequency": "weekly",
+    "end_date": "2026-07-15"
+  }
+}
+```
+
+### Estrutura de Locais (`places`)
+```json
+{
+  "id": "1772117840015436d2bc",
+  "data": {
+    "capacity": 50,
+    "number": "Sala 101",
+    "object_sub_type": ["classroom"]
+  }
+}
+```
+
+> [!IMPORTANT]
+> A capacidade necessária para cada reserva é obtida diretamente do campo `capacity_needed`.
+
 
 - **Exemplo de Resposta (Sucesso):**
   ```json
