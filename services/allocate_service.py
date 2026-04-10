@@ -5,11 +5,16 @@ Refatoração de allocate-reservations.py em classe reutilizável.
 Usa OR-Tools CP-SAT para encontrar opções com mínimo de remanejamentos.
 
 Otimizações aplicadas:
-  - Pré-computação de overlaps e capacidades (fora do loop de salas).
-  - Escopo reduzido do solver: apenas reservas relevantes por sala candidata.
-  - Metadata de timestamp/status para mitigar race conditions no consumidor.
+  - Reservas indexadas por sala.
+  - Conflitos computados sob demanda e propagados para a rede de dependência (hop 1).
+  - Escopo reduzido do solver: apenas variáveis para as reservas atreladas
+    ao problema e todas as salas do campus.
+  - Overlap check rápido e com datas pré-parseadas.
+  - Correção principal: extraída capacidade apenas de 'capacity_needed'
+  - Normalizeção universal dos dias da semana (weekdays) de 1-indexed para 0-indexed.
 """
 
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from ortools.sat.python import cp_model
@@ -18,19 +23,21 @@ from ortools.sat.python import cp_model
 class AllocateService:
     """Busca opções de alocação para uma nova reserva."""
 
+    ALLOWED_ROOM_TYPES = frozenset(
+        ["classroom", "living_room", "computer_lab", "multimedia_room"]
+    )
+
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #
     # ------------------------------------------------------------------ #
 
     @staticmethod
     def time_to_seconds(t_str):
-        """Converte 'HH:MM' para segundos desde meia-noite."""
         h, m = map(int, t_str.split(':'))
         return h * 3600 + m * 60
 
     @staticmethod
     def safe_int(value, default=0):
-        """Conversão segura para inteiro."""
         try:
             if value is None or str(value).strip() == "":
                 return default
@@ -39,49 +46,54 @@ class AllocateService:
             return default
 
     @classmethod
-    def overlaps(cls, res1, res2):
-        """
-        Verifica sobreposição temporal entre duas reservas
-        considerando intervalo de datas, dias da semana e horários.
-        """
-        d1 = res1.get('data', res1)
-        d2 = res2.get('data', res2)
-
-        # 1. Intervalo de datas
-        start1 = datetime.strptime(d1['date'], '%Y-%m-%d')
-        end1 = datetime.strptime(
-            d1.get('end_date') or d1['date'], '%Y-%m-%d'
-        )
-        start2 = datetime.strptime(d2['date'], '%Y-%m-%d')
-        end2 = datetime.strptime(
-            d2.get('end_date') or d2['date'], '%Y-%m-%d'
-        )
-
-        if start1 > end2 or start2 > end1:
+    def _preparse_reservation(cls, res):
+        """Pré-processa dados de data/hora na reserva no momento do parse."""
+        d = res.get('data', res)
+        if not d.get('start_time') or not d.get('end_time') or not d.get('date'):
             return False
 
-        # 2. Dias da semana
-        is_w1 = d1.get('is_weekly', True)
-        is_w2 = d2.get('is_weekly', True)
-
-        w1 = set(d1.get('weekdays', []))
-        w2 = set(d2.get('weekdays', []))
-
-        if not w1:
-            w1 = {start1.weekday()}
-        if not w2:
-            w2 = {start2.weekday()}
-
-        if not w1.intersection(w2):
+        try:
+            res['_start_dt'] = datetime.strptime(d['date'], '%Y-%m-%d')
+        except (ValueError, TypeError):
             return False
 
-        # 3. Horários
-        s1 = cls.time_to_seconds(d1['start_time'])
-        e1 = cls.time_to_seconds(d1['end_time'])
-        s2 = cls.time_to_seconds(d2['start_time'])
-        e2 = cls.time_to_seconds(d2['end_time'])
+        end_date = d.get('end_date')
+        if end_date and isinstance(end_date, str) and end_date.strip():
+            try:
+                res['_end_dt'] = datetime.strptime(end_date, '%Y-%m-%d')
+            except (ValueError, TypeError):
+                res['_end_dt'] = res['_start_dt']
+        else:
+            res['_end_dt'] = res['_start_dt']
 
-        return max(s1, s2) < min(e1, e2)
+        # Normalizar weekdays para int
+        raw_w = d.get('weekdays')
+        wd_set = set()
+        if raw_w and isinstance(raw_w, list):
+            for w in raw_w:
+                try: wd_set.add(int(w))
+                except (ValueError, TypeError): pass
+
+        if not wd_set:
+            res['_weekdays'] = {res['_start_dt'].weekday()}
+        else:
+            res['_weekdays'] = wd_set
+
+        try:
+            res['_s_sec'] = cls.time_to_seconds(d['start_time'])
+            res['_e_sec'] = cls.time_to_seconds(d['end_time'])
+        except (ValueError, TypeError):
+            return False
+
+        return True
+
+    @staticmethod
+    def _overlaps_fast(res1, res2):
+        if res1['_start_dt'] > res2['_end_dt'] or res2['_start_dt'] > res1['_end_dt']:
+            return False
+        if not res1['_weekdays'].intersection(res2['_weekdays']):
+            return False
+        return max(res1['_s_sec'], res2['_s_sec']) < min(res1['_e_sec'], res2['_e_sec'])
 
     # ------------------------------------------------------------------ #
     #  Método principal                                                   #
@@ -90,208 +102,160 @@ class AllocateService:
     @classmethod
     def allocate(cls, new_reservation, places, existing_reservations,
                  limit_moves=3):
-        """
-        Busca opções de alocação para uma nova reserva.
 
-        Args:
-            new_reservation: dict flat com dados da nova reserva
-                (title, date, start_time, end_time, capacity_needed, ...).
-            places: lista de locais (cada um com 'id' e 'data').
-            existing_reservations: lista de reservas existentes
-                (cada uma com 'id' e 'data').
-            limit_moves: máximo de remanejamentos permitidos (padrão: 3).
-
-        Returns:
-            dict com 'total_options', 'options', 'solved_at' e
-            'solver_status' (por opção).
-        """
-        # Filtrar por tipos de sala permitidos
-        allowed_types = [
-            "classroom", "living_room", "computer_lab", "multimedia_room"
-        ]
+        print(f"new_reservation: {new_reservation}")
+        print(f"len(places): {len(places)}")    
+        print(f"places[0]: {places[0]}")
+        print(f"len(existing_reservations): {len(existing_reservations)}")    
+        print(f"existing_reservations[0]: {existing_reservations[0]}")
+        
+        # 1. Filtrar salas por tipos permitidos
         places = [
             p for p in places
-            if p.get('data', {}).get('object_sub_type', [None])[0]
-            in allowed_types
+            if p.get('data', {}).get('object_sub_type', [None])[0] in cls.ALLOWED_ROOM_TYPES
         ]
+        if not places: return {"total_options": 0, "options": []}
 
-        # Normalizar weekdays: JSON usa 1=Seg...7=Dom → Python 0=Seg...6=Dom
+        # 2. Normalizar reservas existentes (weekdays 1-indexed -> 0-indexed)
+        valid_reservations = []
         for res in existing_reservations:
-            if 'weekdays' in res.get('data', {}):
-                try:
-                    res['data']['weekdays'] = [
-                        int(w) - 1 for w in res['data']['weekdays']
-                    ]
-                except TypeError as e:
-                    raise TypeError(
-                        f"Error in 'weekdays' param for reservation id={res.get('id')}. "
-                        f"Value received was: {res['data']['weekdays']}. "
-                        f"Original error: {e}"
-                    ) from e
+            rd = res.get('data', {})
+            raw_wd = rd.get('weekdays')
+            if isinstance(raw_wd, list):
+                rd['weekdays'] = [int(w)-1 for w in raw_wd if str(w).strip().isdigit()]
+            
+            if cls._preparse_reservation(res):
+                valid_reservations.append(res)
 
-        # Normalizar nova reserva para formato com 'data'
-        new_res = {
-            "id": "new_reservation_request",
-            "data": new_reservation,
-        }
-
-        # Mapa de capacidade por disciplina
-        subject_cap = {}
-        if subjects:
-            if isinstance(subjects, dict):
-                subjects = list(subjects.values())
-                
-            subject_cap = {
-                s['id']: cls.safe_int(
-                    s['data'].get('number_vacancies_offered')
-                )
-                for s in subjects
-            }
-
-        all_places = {p['id']: p for p in places}
-        place_ids = list(all_places.keys())
-
-        if not place_ids:
+        # 3. Preparar nova_reserva
+        new_res = {"id": "new_reservation_request", "data": new_reservation}
+        raw_wd = new_res['data'].get('weekdays')
+        if isinstance(raw_wd, list):
+            new_res['data']['weekdays'] = [int(w)-1 for w in raw_wd if str(w).strip().isdigit()]
+            
+        if not cls._preparse_reservation(new_res):
             return {"total_options": 0, "options": []}
 
-        # ------------------------------------------------------------ #
-        # Pré-computação (executada UMA vez, fora do loop de salas)     #
-        # ------------------------------------------------------------ #
-        req_to_solve = [new_res] + existing_reservations
+        cap_needed_new = cls.safe_int(new_res['data'].get('capacity_needed', 0))
 
-        # Capacidade necessária por reserva
-        req_capacities = []
-        for req in req_to_solve:
-            rd = req.get('data', req)
-            c = cls.safe_int(rd.get('capacity_needed', 0))
-            req_capacities.append(c)
+        print(f"cap_needed_new: {cap_needed_new}")
 
-        cap_needed_new = req_capacities[0]
+        # 4. Mapear salas e buscar candidatas
+        place_ids = [p['id'] for p in places]
+        num_places = len(place_ids)
+        place_names = [p['data'].get('number','') for p in places]
+        place_caps = [cls.safe_int(p['data'].get('capacity', 0)) for p in places]
+        place_id_to_idx = {pid: idx for idx, pid in enumerate(place_ids)}
 
-        print(f"Capacidade necessária para a nova reserva: {cap_needed_new}")
-
-        # Capacidade por sala (indexada pela posição em place_ids)
-        place_capacities = [
-            cls.safe_int(all_places[pid]['data'].get('capacity'))
-            for pid in place_ids
+        candidate_indices = [
+            idx for idx in range(num_places)
+            if place_caps[idx] >= cap_needed_new
         ]
-
-        # Salas candidatas: capacidade >= necessidade da nova reserva
-        candidate_pids = [
-            pid for idx, pid in enumerate(place_ids)
-            if place_capacities[idx] >= cap_needed_new
-        ]
-
-        print(f"Total de salas candidatas: {len(candidate_pids)}")
-
-        if not candidate_pids:
+        if not candidate_indices:
             return {"total_options": 0, "options": []}
 
-        # Matriz de conflitos O(n²) — computada uma única vez
-        n = len(req_to_solve)
-        conflict_pairs = []
-        for i in range(n):
-            for k in range(i + 1, n):
-                if cls.overlaps(req_to_solve[i], req_to_solve[k]):
-                    conflict_pairs.append((i, k))
+        # 5. Indexar reservas e computar matriz local
+        res_orig_j = {}
+        res_capacities = {}
+        for i, res in enumerate(valid_reservations):
+            orig_pid = res.get('data', {}).get('place', [])
+            if isinstance(orig_pid, list) and orig_pid and orig_pid[0] in place_id_to_idx:
+                res_orig_j[i] = place_id_to_idx[orig_pid[0]]
+            res_capacities[i] = cls.safe_int(res.get('data', {}).get('capacity_needed', 0))
 
-        # Adjacência de conflitos para expansão rápida
-        conflict_adj = {i: set() for i in range(n)}
-        for i, k in conflict_pairs:
-            conflict_adj[i].add(k)
-            conflict_adj[k].add(i)
+        # Adjacência de conflitos
+        conflict_adj = defaultdict(set)
+        conflicts_with_new = set()
 
-        # Sala original de cada reserva existente
-        orig_place_map = {}
-        for i in range(1, n):
-            orig_ids = req_to_solve[i].get('data', {}).get('place', [])
-            orig_place_map[i] = orig_ids[0] if orig_ids else None
+        for a in range(len(valid_reservations)):
+            if cls._overlaps_fast(new_res, valid_reservations[a]):
+                conflicts_with_new.add(a)
+            for b in range(a + 1, len(valid_reservations)):
+                if cls._overlaps_fast(valid_reservations[a], valid_reservations[b]):
+                    conflict_adj[a].add(b)
+                    conflict_adj[b].add(a)
 
-        # ------------------------------------------------------------ #
-        # Solver por sala candidata                                     #
-        # ------------------------------------------------------------ #
+        # 6. Solver
         results = []
+        for target_j in candidate_indices:
+            target_pid = place_ids[target_j]
 
-        for target_pid in candidate_pids:
-            target_idx = place_ids.index(target_pid)
+            # Relevantes = conflitam com nova + alocados no target
+            initial_relevant = set()
+            initial_relevant.update(conflicts_with_new)
+            for i, j in res_orig_j.items():
+                if j == target_j:
+                    initial_relevant.add(i)
 
-            # Determinar índices de reservas relevantes para este solver
-            relevant = {0}  # nova reserva sempre presente
-
-            # Quem conflita diretamente com a nova reserva
-            relevant |= conflict_adj[0]
-
-            # Quem já está alocado na sala-alvo
-            for i in range(1, n):
-                if orig_place_map.get(i) == target_pid:
-                    relevant.add(i)
-
-            # Expandir: reservas que conflitam com as relevantes
-            # (necessário para que o solver consiga reacomodar cascatas)
-            expanded = set(relevant)
-            for idx in list(relevant):
-                expanded |= conflict_adj[idx]
-            relevant = expanded
+            # Expandir exatamente 1 nível de conflito na rede toda
+            relevant = set(initial_relevant)
+            for ri in initial_relevant:
+                relevant.update(conflict_adj[ri])
 
             relevant_list = sorted(relevant)
-            local_n = len(relevant_list)
+            local_n = 1 + len(relevant_list)
+            
+            def global_idx(li):
+                return -1 if li == 0 else relevant_list[li-1]
+            
+            def global_res(li):
+                return new_res if li == 0 else valid_reservations[global_idx(li)]
 
-            # Mapeamento local ↔ global
-            local_to_global = {li: gi for li, gi in enumerate(relevant_list)}
-            global_to_local = {gi: li for li, gi in enumerate(relevant_list)}
+            # Computar conflitos restrito ao subgrupos (local_n x local_n)
+            local_conflicts = []
+            for a in range(local_n):
+                for b in range(a + 1, local_n):
+                    if a == 0:
+                        if global_idx(b) in conflicts_with_new:
+                            local_conflicts.append((a, b))
+                    else:
+                        if global_idx(b) in conflict_adj[global_idx(a)]:
+                            local_conflicts.append((a, b))
 
+            # Montar modelo
             model = cp_model.CpModel()
-
             x = {}
             for i in range(local_n):
-                for j in range(len(place_ids)):
+                for j in range(num_places):
                     x[i, j] = model.NewBoolVar(f'x_{i}_{j}')
 
-            # Cada reserva em exatamente 1 sala
+            # Restrição 1: Uma sala para cada reserva
             for i in range(local_n):
-                model.Add(
-                    sum(x[i, j] for j in range(len(place_ids))) == 1
-                )
+                model.AddExactlyOne(x[i, j] for j in range(num_places))
 
-            # Sem sobreposição na mesma sala (apenas pares relevantes)
-            for gi, gk in conflict_pairs:
-                if gi in global_to_local and gk in global_to_local:
-                    li = global_to_local[gi]
-                    lk = global_to_local[gk]
-                    for j in range(len(place_ids)):
-                        model.Add(x[li, j] + x[lk, j] <= 1)
+            # Restrição 2: Sem sobreposição
+            for a, b in local_conflicts:
+                for j in range(num_places):
+                    model.Add(x[a, j] + x[b, j] <= 1)
 
-            # Restrição de capacidade
-            for li in range(local_n):
-                gi = local_to_global[li]
-                c_needed = req_capacities[gi]
-                if c_needed > 0:
-                    for j in range(len(place_ids)):
-                        if place_capacities[j] < c_needed:
-                            model.Add(x[li, j] == 0)
+            # Restrição 3: Capacidade
+            for j in range(num_places):
+                if place_caps[j] < cap_needed_new:
+                    model.Add(x[0, j] == 0)
 
-            # Fixar nova reserva nesta sala candidata
-            model.Add(x[global_to_local[0], target_idx] == 1)
+            for li in range(1, local_n):
+                gi = global_idx(li)
+                cap = res_capacities[gi]
+                orig_j = res_orig_j.get(gi)
+                if cap > 0:
+                    for j in range(num_places):
+                        if place_caps[j] < cap:
+                            if orig_j != j:
+                                model.Add(x[li, j] == 0)
 
-            # Variáveis de remanejamento
+            # Restrição 4: Fixar no candidato
+            model.Add(x[0, target_j] == 1)
+
+            # Remanejamentos
             is_moved = []
-            for li in range(local_n):
-                gi = local_to_global[li]
-                if gi == 0:
-                    continue  # nova reserva, não é remanejamento
-
-                orig_id = orig_place_map.get(gi)
-                if orig_id and orig_id in place_ids:
-                    orig_idx = place_ids.index(orig_id)
-                    m = model.NewBoolVar(f'moved_{gi}_{target_pid}')
-                    model.Add(m == 1).OnlyEnforceIf(
-                        x[li, orig_idx].Not()
-                    )
-                    model.Add(m == 0).OnlyEnforceIf(x[li, orig_idx])
+            for li in range(1, local_n):
+                gi = global_idx(li)
+                if gi in res_orig_j:
+                    orig_j = res_orig_j[gi]
+                    m = model.NewBoolVar(f'moved_{gi}')
+                    model.Add(m == 1).OnlyEnforceIf(x[li, orig_j].Not())
+                    model.Add(m == 0).OnlyEnforceIf(x[li, orig_j])
                     is_moved.append((li, gi, m))
-                else:
-                    # Sem sala original conhecida — não conta como move
-                    pass
 
             move_vars = [m for _, _, m in is_moved]
             model.Minimize(sum(move_vars))
@@ -305,32 +269,24 @@ class AllocateService:
                 moves_detail = []
                 for li, gi, m_var in is_moved:
                     if solver.Value(m_var):
-                        # Descobrir para qual sala foi movida
-                        for j, pid in enumerate(place_ids):
+                        for j in range(num_places):
                             if solver.Value(x[li, j]):
                                 moves_detail.append({
-                                    "reservation_id": req_to_solve[gi]['id'],
-                                    "to_place": pid,
+                                    "reservation_id": valid_reservations[gi]['id'],
+                                    "to_place": place_ids[j],
                                 })
                                 break
 
                 results.append({
                     "place_id": target_pid,
-                    "place_number": all_places[target_pid]['data'].get(
-                        'number', ''
-                    ),
-                    "place_capacity": cls.safe_int(
-                        all_places[target_pid]['data'].get('capacity')
-                    ),
+                    "place_number": place_names[target_j],
+                    "place_capacity": place_caps[target_j],
                     "moves_count": len(moves_detail),
                     "moves": moves_detail,
-                    "solver_status": (
-                        "OPTIMAL" if status == cp_model.OPTIMAL
-                        else "FEASIBLE"
-                    ),
+                    "solver_status": "OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE",
                 })
 
-        # Ordenar por quantidade de remanejamentos
+        # Sort por remanejamentos
         results.sort(key=lambda r: r['moves_count'])
 
         return {
