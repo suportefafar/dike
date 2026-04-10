@@ -135,19 +135,6 @@ class AllocateService:
             "data": new_reservation,
         }
 
-        # Mapa de capacidade por disciplina
-        subject_cap = {}
-        if subjects:
-            if isinstance(subjects, dict):
-                subjects = list(subjects.values())
-                
-            subject_cap = {
-                s['id']: cls.safe_int(
-                    s['data'].get('number_vacancies_offered')
-                )
-                for s in subjects
-            }
-
         all_places = {p['id']: p for p in places}
         place_ids = list(all_places.keys())
 
