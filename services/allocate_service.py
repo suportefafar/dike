@@ -103,11 +103,11 @@ class AllocateService:
     def allocate(cls, new_reservation, places, existing_reservations,
                  limit_moves=3):
 
-        print(f"new_reservation: {new_reservation}")
-        print(f"len(places): {len(places)}")    
-        print(f"places[0]: {places[0]}")
-        print(f"len(existing_reservations): {len(existing_reservations)}")    
-        print(f"existing_reservations[0]: {existing_reservations[0]}")
+        # print(f"new_reservation: {new_reservation}")
+        # print(f"len(places): {len(places)}")    
+        # print(f"places[0]: {places[0]}")
+        # print(f"len(existing_reservations): {len(existing_reservations)}")    
+        # print(f"existing_reservations[0]: {existing_reservations[0]}")
         
         # 1. Filtrar salas por tipos permitidos
         places = [
@@ -137,8 +137,6 @@ class AllocateService:
             return {"total_options": 0, "options": []}
 
         cap_needed_new = cls.safe_int(new_res['data'].get('capacity_needed', 0))
-
-        print(f"cap_needed_new: {cap_needed_new}")
 
         # 4. Mapear salas e buscar candidatas
         place_ids = [p['id'] for p in places]
@@ -262,7 +260,7 @@ class AllocateService:
             model.Add(sum(move_vars) <= limit_moves)
 
             solver = cp_model.CpSolver()
-            solver.parameters.max_time_in_seconds = 2.0
+            solver.parameters.max_time_in_seconds = 20.0
             status = solver.Solve(model)
 
             if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
