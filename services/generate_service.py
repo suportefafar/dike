@@ -16,8 +16,8 @@ from ortools.sat.python import cp_model
 class GenerateService:
     """Gera grade completa de reservas para um semestre."""
 
-    DEFAULT_SEMESTER_START = "2026-03-01"
-    DEFAULT_SEMESTER_END = "2026-07-15"
+    DEFAULT_SEMESTER_START = "2026-08-03"
+    DEFAULT_SEMESTER_END = "2026-12-09"
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #
