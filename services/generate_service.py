@@ -8,9 +8,12 @@ Usa OR-Tools CP-SAT para otimizar alocação de disciplinas em salas.
 import re
 import uuid
 import unicodedata
+import logging
 from datetime import datetime, timedelta
 
 from ortools.sat.python import cp_model
+
+logger = logging.getLogger(__name__)
 
 
 class GenerateService:
@@ -190,6 +193,9 @@ class GenerateService:
 
         for subj in subjects_data:
             sd = subj.get('data', {})
+            subj_code = sd.get('code', 'UNKNOWN')
+            subj_group = sd.get('group', 'UNKNOWN')
+            subj_desc = f"{subj_code} (Group {subj_group})"
 
             # Vagas
             try:
@@ -198,20 +204,24 @@ class GenerateService:
                 vacancies = 0
 
             if vacancies <= 0:
+                logger.info(f"Skipped {subj_desc}: vacancies <= 0 (value: {vacancies})")
                 skipped['vacancies_zero'] += 1
                 continue
             if vacancies >= 80:
+                logger.info(f"Skipped {subj_desc}: vacancies >= 80 (value: {vacancies})")
                 skipped['vacancies_max'] += 1
                 continue
 
             # Horário
             desired_time = sd.get('desired_time', '')
             if not desired_time:
+                logger.info(f"Skipped {subj_desc}: no desired_time defined")
                 skipped['no_time'] += 1
                 continue
 
             slots = cls.parse_schedule(desired_time)
             if not slots:
+                logger.info(f"Skipped {subj_desc}: failed to parse schedule '{desired_time}'")
                 skipped['bad_format'] += 1
                 continue
 
@@ -220,15 +230,18 @@ class GenerateService:
                 sd.get('name_of_subject', '')
             )
             if 'estagio' in name_clean:
+                logger.info(f"Skipped {subj_desc}: name contains 'estagio'")
                 skipped['estagio'] += 1
                 continue
             if 'monografia' in name_clean:
+                logger.info(f"Skipped {subj_desc}: name contains 'monografia'")
                 skipped['monografia'] += 1
                 continue
 
             # Grupo prático
             group = str(sd.get('group', '')).upper()
             if 'P' in group:
+                logger.info(f"Skipped {subj_desc}: practical group '{group}' contains 'P'")
                 skipped['practical_group'] += 1
                 continue
 
@@ -240,6 +253,7 @@ class GenerateService:
                 and str(use_auto[0]).upper() == 'SIM'
             )
             if not is_sim:
+                logger.info(f"Skipped {subj_desc}: use_on_auto_reservation is not 'SIM'")
                 skipped['auto_res_disabled'] += 1
                 continue
 
@@ -256,9 +270,11 @@ class GenerateService:
                 existing['vacancies_int'] += vacancies
                 existing['group_list'].append(str(sd.get('group', '')))
                 existing['id_list'].append(subj['id'])
+                logger.info(f"Merged {subj_desc} into existing subject {existing['data'].get('code')} due to matching time and code.")
             else:
                 filtered.append(subj)
 
+        logger.info(f"Filtering complete. Accepted: {len(filtered)}, Skipped: {skipped}")
         return filtered, skipped
 
     # ------------------------------------------------------------------ #
@@ -301,6 +317,7 @@ class GenerateService:
             }
 
         # Modelo CP-SAT
+        # Modelo CP-SAT
         model = cp_model.CpModel()
         allocations = {}
 
@@ -314,9 +331,20 @@ class GenerateService:
                 ):
                     conflicting_pairs.append((i, j))
 
+        # Encontrar capacidade máxima de sala disponível
+        max_room_capacity = 0
+        for p in places:
+            try:
+                capacity = int(p['data']['capacity'])
+            except (ValueError, TypeError, KeyError):
+                capacity = 0
+            if capacity > max_room_capacity:
+                max_room_capacity = capacity
+
         # Variáveis de alocação (somente onde capacidade permite)
         for s_idx, s in enumerate(filtered_subjects):
             vacancies = s['vacancies_int']
+            has_candidate_room = False
             for p_idx, p in enumerate(places):
                 try:
                     capacity = int(p['data']['capacity'])
@@ -326,6 +354,14 @@ class GenerateService:
                 if vacancies <= capacity:
                     var_name = f'alloc_s{s_idx}_p{p_idx}'
                     allocations[(s_idx, p_idx)] = model.NewBoolVar(var_name)
+                    has_candidate_room = True
+
+            if not has_candidate_room:
+                logger.warning(
+                    f"Subject {s['data'].get('code')} ({s['data'].get('group')}) "
+                    f"has {vacancies} vacancies, which exceeds the maximum room capacity ({max_room_capacity}). "
+                    f"It fits no room and cannot be assigned!"
+                )
 
         # Restrições: cada disciplina em no máximo 1 sala
         total_assigned = []
@@ -353,14 +389,16 @@ class GenerateService:
         # Objetivo: maximizar disciplinas alocadas
         model.Maximize(sum(total_assigned))
 
-        # Forçar 100% de alocação
-        model.Add(sum(total_assigned) == len(filtered_subjects))
+        # REMOVED Rule 3 (forcing 100% allocation) as per explanation_cpsat_solver.md
+        # model.Add(sum(total_assigned) == len(filtered_subjects))
 
         # Resolver
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = 300.0
         solver.parameters.num_search_workers = 8
         status = solver.Solve(model)
+
+        logger.info(f"Solver run finished. Status: {solver.StatusName(status)}")
 
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             raise ValueError(
@@ -450,11 +488,13 @@ class GenerateService:
                     reservations.append(res_obj)
             else:
                 subj = filtered_subjects[s_idx]
-                unassigned.append(
+                unassigned_msg = (
                     f"{subj['data']['code']} "
                     f"({subj['data']['group']}) - "
                     f"Vagas: {subj['vacancies_int']}"
                 )
+                unassigned.append(unassigned_msg)
+                logger.warning(f"Unassigned Subject: {unassigned_msg}")
 
         total_subjects = len(filtered_subjects)
         success_rate = (

@@ -284,8 +284,8 @@ for s1_idx, s2_idx in conflicting_pairs:
 # Objective: Maximize assigned subjects
 model.Maximize(sum(total_assigned))
 
-# Enforce that ALL subjects must be assigned (100% allocation)
-model.Add(sum(total_assigned) == len(filtered_subjects))
+# REMOVED Rule 3 (forcing 100% allocation) as per explanation_cpsat_solver.md
+# model.Add(sum(total_assigned) == len(filtered_subjects))
 
 print("Solving...")
 solver = cp_model.CpSolver()
