@@ -204,24 +204,24 @@ class GenerateService:
                 vacancies = 0
 
             if vacancies <= 0:
-                logger.info(f"Skipped {subj_desc}: vacancies <= 0 (value: {vacancies})")
+                logger.debug(f"Skipped {subj_desc}: vacancies <= 0 (value: {vacancies})")
                 skipped['vacancies_zero'] += 1
                 continue
             if vacancies >= 80:
-                logger.info(f"Skipped {subj_desc}: vacancies >= 80 (value: {vacancies})")
+                logger.debug(f"Skipped {subj_desc}: vacancies >= 80 (value: {vacancies})")
                 skipped['vacancies_max'] += 1
                 continue
 
             # Horário
             desired_time = sd.get('desired_time', '')
             if not desired_time:
-                logger.info(f"Skipped {subj_desc}: no desired_time defined")
+                logger.debug(f"Skipped {subj_desc}: no desired_time defined")
                 skipped['no_time'] += 1
                 continue
 
             slots = cls.parse_schedule(desired_time)
             if not slots:
-                logger.info(f"Skipped {subj_desc}: failed to parse schedule '{desired_time}'")
+                logger.debug(f"Skipped {subj_desc}: failed to parse schedule '{desired_time}'")
                 skipped['bad_format'] += 1
                 continue
 
@@ -230,18 +230,18 @@ class GenerateService:
                 sd.get('name_of_subject', '')
             )
             if 'estagio' in name_clean:
-                logger.info(f"Skipped {subj_desc}: name contains 'estagio'")
+                logger.debug(f"Skipped {subj_desc}: name contains 'estagio'")
                 skipped['estagio'] += 1
                 continue
             if 'monografia' in name_clean:
-                logger.info(f"Skipped {subj_desc}: name contains 'monografia'")
+                logger.debug(f"Skipped {subj_desc}: name contains 'monografia'")
                 skipped['monografia'] += 1
                 continue
 
             # Grupo prático
             group = str(sd.get('group', '')).upper()
             if 'P' in group:
-                logger.info(f"Skipped {subj_desc}: practical group '{group}' contains 'P'")
+                logger.debug(f"Skipped {subj_desc}: practical group '{group}' contains 'P'")
                 skipped['practical_group'] += 1
                 continue
 
@@ -253,7 +253,7 @@ class GenerateService:
                 and str(use_auto[0]).upper() == 'SIM'
             )
             if not is_sim:
-                logger.info(f"Skipped {subj_desc}: use_on_auto_reservation is not 'SIM'")
+                logger.debug(f"Skipped {subj_desc}: use_on_auto_reservation is not 'SIM'")
                 skipped['auto_res_disabled'] += 1
                 continue
 
@@ -270,7 +270,7 @@ class GenerateService:
                 existing['vacancies_int'] += vacancies
                 existing['group_list'].append(str(sd.get('group', '')))
                 existing['id_list'].append(subj['id'])
-                logger.info(f"Merged {subj_desc} into existing subject {existing['data'].get('code')} due to matching time and code.")
+                logger.debug(f"Merged {subj_desc} into existing subject {existing['data'].get('code')} due to matching time and code.")
             else:
                 filtered.append(subj)
 
@@ -316,7 +316,6 @@ class GenerateService:
                 },
             }
 
-        # Modelo CP-SAT
         # Modelo CP-SAT
         model = cp_model.CpModel()
         allocations = {}

@@ -57,7 +57,7 @@ However, when running with **live database data**, a conflict occurs:
 ## 🛠️ How to Fix This in the Code
 
 > [!TIP]
-> Since we are not changing code in this task, here is how you would resolve this in a real development ticket.
+> This fix has been applied in `generate_service.py` and `gerenate-reservations.py`.
 
 Instead of demanding a perfect 100% match, you change the solver to **maximize** assignments.
 
