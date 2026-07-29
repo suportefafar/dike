@@ -21,6 +21,7 @@ class GenerateService:
 
     DEFAULT_SEMESTER_START = "2026-08-03"
     DEFAULT_SEMESTER_END = "2026-12-09"
+    GENERATION_PLACE_TYPES = {"classroom"}
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #
@@ -192,8 +193,29 @@ class GenerateService:
         return -1
 
     # ------------------------------------------------------------------ #
-    #  Filtragem de disciplinas                                           #
+    #  Filtragem                                                          #
     # ------------------------------------------------------------------ #
+
+    @classmethod
+    def _filter_places(cls, places_data):
+        """Mantém apenas os tipos de sala elegíveis para geração."""
+        filtered = []
+
+        for place in places_data:
+            place_data = place.get('data', {})
+            place_types = place_data.get('object_sub_type', [])
+            place_type = place_types[0] if place_types else ""
+
+            if place_type in cls.GENERATION_PLACE_TYPES:
+                filtered.append(place)
+
+        logger.info(
+            "Place filtering complete. Eligible: %s, Skipped: %s, Allowed types: %s",
+            len(filtered),
+            len(places_data) - len(filtered),
+            sorted(cls.GENERATION_PLACE_TYPES),
+        )
+        return filtered
 
     @classmethod
     def _filter_subjects(cls, subjects_data):
@@ -315,6 +337,7 @@ class GenerateService:
 
         # Filtrar disciplinas
         filtered_subjects, skipped = cls._filter_subjects(subjects)
+        filtered_places = cls._filter_places(places)
 
         if not filtered_subjects:
             return {
@@ -343,7 +366,7 @@ class GenerateService:
 
         # Encontrar capacidade máxima de sala disponível
         max_room_capacity = 0
-        for p in places:
+        for p in filtered_places:
             try:
                 capacity = int(p['data']['capacity'])
             except (ValueError, TypeError, KeyError):
@@ -355,7 +378,7 @@ class GenerateService:
         for s_idx, s in enumerate(filtered_subjects):
             vacancies = s['vacancies_int']
             has_candidate_room = False
-            for p_idx, p in enumerate(places):
+            for p_idx, p in enumerate(filtered_places):
                 try:
                     capacity = int(p['data']['capacity'])
                 except (ValueError, TypeError, KeyError):
@@ -378,7 +401,7 @@ class GenerateService:
         for s_idx in range(len(filtered_subjects)):
             pk_vars = [
                 allocations[(s_idx, p_idx)]
-                for p_idx in range(len(places))
+                for p_idx in range(len(filtered_places))
                 if (s_idx, p_idx) in allocations
             ]
             if pk_vars:
@@ -387,7 +410,7 @@ class GenerateService:
 
         # Restrições de conflito
         for s1_idx, s2_idx in conflicting_pairs:
-            for p_idx in range(len(places)):
+            for p_idx in range(len(filtered_places)):
                 if ((s1_idx, p_idx) in allocations
                         and (s2_idx, p_idx) in allocations):
                     model.Add(
@@ -423,7 +446,7 @@ class GenerateService:
 
         for s_idx in range(len(filtered_subjects)):
             assigned_p_idx = -1
-            for p_idx in range(len(places)):
+            for p_idx in range(len(filtered_places)):
                 if (s_idx, p_idx) in allocations:
                     if solver.Value(allocations[(s_idx, p_idx)]) == 1:
                         assigned_p_idx = p_idx
@@ -432,7 +455,7 @@ class GenerateService:
             if assigned_p_idx != -1:
                 assigned_count += 1
                 subj = filtered_subjects[s_idx]
-                place = places[assigned_p_idx]
+                place = filtered_places[assigned_p_idx]
                 subj_data = subj.get('data', {})
 
                 start_date = (
