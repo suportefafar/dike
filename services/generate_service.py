@@ -92,6 +92,15 @@ class GenerateService:
             c for c in nfkd_form if not unicodedata.combining(c)
         ).lower()
 
+    @classmethod
+    def normalize_course(cls, course_value):
+        """Normaliza course para comparação, aceitando lista ou string."""
+        if isinstance(course_value, list):
+            course_value = course_value[0] if course_value else ""
+        if course_value is None:
+            return ""
+        return cls.clean_subject_name(str(course_value).strip())
+
     @staticmethod
     def parse_date(date_str):
         """Faz parse de datas nos formatos YYYY-MM-DD ou DD/MM/YYYY."""
@@ -145,29 +154,39 @@ class GenerateService:
         )
         return rrule, first_occurrence.strftime("%Y-%m-%d")
 
-    @staticmethod
-    def index_of_reservation(new_subj, existing_subjects):
+    @classmethod
+    def index_of_reservation(cls, new_subj, existing_subjects):
         """
         Verifica se já existe disciplina com mesmo código/horário
-        mas grupo/ID diferente (para merge de turmas).
+        mas grupo/ID diferente e com owner_group ou course distintos
+        (para merge de turmas).
         """
         new_data = new_subj.get('data', {})
         new_code = new_data.get('code')
         new_group = str(new_data.get('group', ''))
         new_slots = new_subj.get('parsed_slots', [])
         new_id = new_subj.get('id')
+        new_owner_group = str(new_subj.get('owner_group', ''))
+        new_course = cls.normalize_course(new_data.get('course'))
 
         for i, existing in enumerate(existing_subjects):
             ex_data = existing.get('data', {})
             ex_slots = existing.get('parsed_slots', [])
             ex_group = str(ex_data.get('group', ''))
             ex_id = existing.get('id')
+            ex_owner_group = str(existing.get('owner_group', ''))
+            ex_course = cls.normalize_course(ex_data.get('course'))
+            has_distinct_context = (
+                ex_owner_group != new_owner_group
+                or (ex_course and new_course and ex_course != new_course)
+            )
 
             if (
                 ex_id != new_id
                 and ex_group != new_group
                 and ex_data.get('code') == new_code
                 and ex_slots == new_slots
+                and has_distinct_context
             ):
                 return i
         return -1
@@ -187,7 +206,6 @@ class GenerateService:
             'bad_format': 0,
             'estagio': 0,
             'monografia': 0,
-            'practical_group': 0,
             'auto_res_disabled': 0,
         }
 
@@ -236,13 +254,6 @@ class GenerateService:
             if 'monografia' in name_clean:
                 logger.debug(f"Skipped {subj_desc}: name contains 'monografia'")
                 skipped['monografia'] += 1
-                continue
-
-            # Grupo prático
-            group = str(sd.get('group', '')).upper()
-            if 'P' in group:
-                logger.debug(f"Skipped {subj_desc}: practical group '{group}' contains 'P'")
-                skipped['practical_group'] += 1
                 continue
 
             # Auto-reserva habilitada

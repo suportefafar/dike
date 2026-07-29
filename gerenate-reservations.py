@@ -60,6 +60,14 @@ def clean_subject_name(name):
     nfkd_form = unicodedata.normalize('NFKD', name)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower()
 
+def normalize_course(course_value):
+    """Normalize course for comparison, accepting list or string."""
+    if isinstance(course_value, list):
+        course_value = course_value[0] if course_value else ""
+    if course_value is None:
+        return ""
+    return clean_subject_name(str(course_value).strip())
+
 def parse_date(date_str):
     """
     Parses date strings in YYYY-MM-DD or DD/MM/YYYY formats.
@@ -132,33 +140,43 @@ skipped_counts = {
     'bad_format': 0,
     'estagio': 0,
     'monografia': 0,
-    'practical_group': 0,
     'auto_res_disabled': 0
 }
 
 def index_of_reservation(new_subj, existing_subjects):
     """
     Python implementation of the PHP index_of_reservation logic.
-    Checks if a matching subject (same code/schedule, different group/ID) already exists.
+    Checks if a matching subject (same code/schedule, different group/ID)
+    already exists with distinct owner_group or course.
     """
     new_data = new_subj.get('data', {})
     new_code = new_data.get('code')
     new_group = str(new_data.get('group', ''))
     new_slots = new_subj.get('parsed_slots', [])
     new_id = new_subj.get('id')
+    new_owner_group = str(new_subj.get('owner_group', ''))
+    new_course = normalize_course(new_data.get('course'))
 
     for i, existing in enumerate(existing_subjects):
         ex_data = existing.get('data', {})
         ex_slots = existing.get('parsed_slots', [])
         ex_group = str(ex_data.get('group', ''))
         ex_id = existing.get('id')
+        ex_owner_group = str(existing.get('owner_group', ''))
+        ex_course = normalize_course(ex_data.get('course'))
+        has_distinct_context = (
+            ex_owner_group != new_owner_group
+            or (ex_course and new_course and ex_course != new_course)
+        )
 
         # Logic comparison based on PHP function:
-        # Different ID AND Different Group AND Same Code AND Same Schedule (start, end, weekdays)
+        # Different ID AND Different Group AND Same Code AND Same
+        # Schedule AND Distinct owner_group/course context.
         if (ex_id != new_id and 
             ex_group != new_group and 
             ex_data.get('code') == new_code and 
-            ex_slots == new_slots):
+            ex_slots == new_slots and
+            has_distinct_context):
             return i
     return -1
 
@@ -196,12 +214,6 @@ for subj in subjects_data:
         continue
     if 'monografia' in name_clean:
         skipped_counts['monografia'] += 1
-        continue
-        
-
-    group = str(sd.get('group', '')).upper()
-    if 'P' in group:
-        skipped_counts['practical_group'] += 1
         continue
         
 
@@ -384,4 +396,3 @@ if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
     
 else:
     print("Could not find a feasible solution.")
-
