@@ -221,6 +221,7 @@ class GenerateService:
     def _filter_subjects(cls, subjects_data):
         """Filtra e agrupa disciplinas válidas para alocação."""
         filtered = []
+        bad_format_subjects = []
         skipped = {
             'vacancies_zero': 0,
             'vacancies_max': 0,
@@ -263,6 +264,12 @@ class GenerateService:
             if not slots:
                 logger.debug(f"Skipped {subj_desc}: failed to parse schedule '{desired_time}'")
                 skipped['bad_format'] += 1
+                bad_format_subjects.append({
+                    'id': subj.get('id'),
+                    'code': subj_code,
+                    'group': subj_group,
+                    'desired_time': desired_time,
+                })
                 continue
 
             # Nome
@@ -308,7 +315,7 @@ class GenerateService:
                 filtered.append(subj)
 
         logger.info(f"Filtering complete. Accepted: {len(filtered)}, Skipped: {skipped}")
-        return filtered, skipped
+        return filtered, skipped, bad_format_subjects
 
     # ------------------------------------------------------------------ #
     #  Método principal                                                   #
@@ -336,7 +343,7 @@ class GenerateService:
         semester_end = semester_end or cls.DEFAULT_SEMESTER_END
 
         # Filtrar disciplinas
-        filtered_subjects, skipped = cls._filter_subjects(subjects)
+        filtered_subjects, skipped, bad_format_subjects = cls._filter_subjects(subjects)
         filtered_places = cls._filter_places(places)
 
         if not filtered_subjects:
@@ -346,6 +353,7 @@ class GenerateService:
                     "total_reservations": 0,
                     "subjects_accepted": 0,
                     "subjects_skipped": skipped,
+                    "bad_format_subjects": bad_format_subjects,
                     "success_rate": 100.0,
                 },
             }
@@ -543,6 +551,7 @@ class GenerateService:
                 "subjects_accepted": total_subjects,
                 "subjects_assigned": assigned_count,
                 "subjects_skipped": skipped,
+                "bad_format_subjects": bad_format_subjects,
                 "unassigned": unassigned,
                 "success_rate": round(success_rate, 2),
             },

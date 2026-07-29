@@ -81,9 +81,18 @@ Disciplinas são ignoradas se:
       "subjects_assigned": 80,
       "subjects_skipped": {
         "vacancies_zero": 5,
+        "bad_format": 3,
         "no_time": 10,
         "auto_res_disabled": 20
       },
+      "bad_format_subjects": [
+        {
+          "id": "12345",
+          "code": "CIC0001",
+          "group": "A",
+          "desired_time": "quinta 13:30-15:30"
+        }
+      ],
       "unassigned": [],
       "success_rate": 100.0
     }
