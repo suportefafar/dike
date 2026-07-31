@@ -430,16 +430,46 @@ class GenerateService:
         # Objetivo: maximizar disciplinas alocadas
         model.Maximize(sum(total_assigned))
 
-        # REMOVED Rule 3 (forcing 100% allocation) as per explanation_cpsat_solver.md
-        # model.Add(sum(total_assigned) == len(filtered_subjects))
+        # Tentar primeiro a alocação de 100%. A variável de controle permite
+        # desativar somente essa restrição e resolver novamente com o mesmo
+        # modelo de maximização quando a solução estrita não for viável.
+        require_full_allocation = model.NewBoolVar(
+            'require_full_allocation'
+        )
+        model.Add(
+            sum(total_assigned) == len(filtered_subjects)
+        ).OnlyEnforceIf(require_full_allocation)
+        model.AddAssumption(require_full_allocation)
 
-        # Resolver
+        # Resolver primeiro no modo estrito.
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = 300.0
         solver.parameters.num_search_workers = 8
         status = solver.Solve(model)
 
-        logger.info(f"Solver run finished. Status: {solver.StatusName(status)}")
+        logger.info(
+            "Strict allocation solver run finished. Status: %s",
+            solver.StatusName(status),
+        )
+
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            logger.warning(
+                "Strict 100%% allocation failed with status %s. "
+                "Falling back to best-effort allocation.",
+                solver.StatusName(status),
+            )
+            model.ClearAssumptions()
+            model.AddAssumption(require_full_allocation.Not())
+
+            solver = cp_model.CpSolver()
+            solver.parameters.max_time_in_seconds = 300.0
+            solver.parameters.num_search_workers = 8
+            status = solver.Solve(model)
+
+            logger.info(
+                "Best-effort allocation solver run finished. Status: %s",
+                solver.StatusName(status),
+            )
 
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             raise ValueError(
